@@ -1,6 +1,6 @@
-from flask import Flask, request, jsonify, render_template, redirect, url_for
+from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
-import sqlite3
+import psycopg2
 import os
 
 app = Flask(__name__)
@@ -13,24 +13,28 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 # Ensure the uploads folder exists
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# SQLite database setup
+# PostgreSQL Database Configuration
+DATABASE_URL = os.environ.get("DATABASE_URL")
+conn = psycopg2.connect(DATABASE_URL)
+
+# Create Table for Students
 def init_db():
-    conn = sqlite3.connect("admissions.db")
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS students (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        name TEXT NOT NULL,
-                        guardian_name TEXT NOT NULL,
-                        guardian_phone TEXT NOT NULL,
-                        student_phone TEXT,
-                        dob TEXT NOT NULL,
-                        address TEXT NOT NULL,
-                        class TEXT NOT NULL,
-                        subjects TEXT,
-                        photo_path TEXT
-                    )''')
-    conn.commit()
-    conn.close()
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS students (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                guardian_name TEXT NOT NULL,
+                guardian_phone TEXT NOT NULL,
+                student_phone TEXT,
+                dob DATE NOT NULL,
+                address TEXT NOT NULL,
+                class TEXT NOT NULL,
+                subjects TEXT,
+                photo_path TEXT
+            )
+        """)
+        conn.commit()
 
 init_db()
 
@@ -66,13 +70,12 @@ def submit_admission():
             photo.save(photo_path)
 
         # Save to database
-        conn = sqlite3.connect("admissions.db")
-        cursor = conn.cursor()
-        cursor.execute('''INSERT INTO students (name, guardian_name, guardian_phone, student_phone, dob, address, class, subjects, photo_path)
-                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                       (name, guardian_name, guardian_phone, student_phone, dob, address, class_name, subjects, photo_path))
-        conn.commit()
-        conn.close()
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO students (name, guardian_name, guardian_phone, student_phone, dob, address, class, subjects, photo_path)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (name, guardian_name, guardian_phone, student_phone, dob, address, class_name, subjects, photo_path))
+            conn.commit()
 
         return jsonify({"message": "Admission submitted successfully!"}), 200
 
@@ -83,17 +86,33 @@ def submit_admission():
 @app.route('/admin', methods=['GET'])
 def admin_view():
     try:
-        conn = sqlite3.connect("admissions.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM students")
-        students = cursor.fetchall()
-        conn.close()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM students")
+            students = cursor.fetchall()
+        
+        # Convert student data to JSON
+        student_list = [
+            {
+                "id": row[0],
+                "name": row[1],
+                "guardian_name": row[2],
+                "guardian_phone": row[3],
+                "student_phone": row[4],
+                "dob": row[5],
+                "address": row[6],
+                "class": row[7],
+                "subjects": row[8],
+                "photo_path": row[9]
+            }
+            for row in students
+        ]
 
-        # Return data as JSON
-        return jsonify({"students": students}), 200
+        return jsonify({"students": student_list}), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# Run the server
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))  # Use Render's PORT or default to 5000
+    app.run(host='0.0.0.0', port=port)
